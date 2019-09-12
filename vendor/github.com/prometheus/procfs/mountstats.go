@@ -44,6 +44,8 @@ const (
 
 	fieldTransport11TCPLen = 13
 	fieldTransport11UDPLen = 10
+
+	fieldTransport11RDMALen = 27
 )
 
 // A Mount is a device mount parsed from /proc/[pid]/mountstats.
@@ -229,6 +231,24 @@ type NFSTransportStats struct {
 	// A running counter, incremented on each request as the current size of the
 	// pending queue.
 	CumulativePendingQueue uint64
+ // XXX rob needs to add some descriptions for the following for rdma proto
+                ReplyWaitsForSend uint64
+		ReadSegments  uint64
+		WriteSegments	uint64
+		ReplySegments	uint64
+		TotalRdmaReqs	uint64
+		TotalRdmaReps	uint64
+		Pullup	uint64
+		Fixup	uint64
+		Hardway	uint64
+		FailedMarshal	uint64
+		BadReply	uint64
+		NoMsgCalls	uint64
+		RecveredMrs	uint64
+		OrphanedMrs	uint64
+		AllocatedMrs	uint64
+		LocalInvalidates	uint64
+		EmptySendCtxQ	uint64
 }
 
 // parseMountStats parses a /proc/[pid]/mountstats file and returns a slice
@@ -563,8 +583,8 @@ func parseNFSTransportStats(ss []string, statVersion string) (*NFSTransportStats
 		var expectedLength int
 		if protocol == "tcp" {
 			expectedLength = fieldTransport11TCPLen
-		} else if protocol == "udp" {
-			expectedLength = fieldTransport11UDPLen
+		} else if protocol == "rdma" {
+			expectedLength = fieldTransport11RDMALen
 		} else {
 			return nil, fmt.Errorf("invalid NFS protocol \"%s\" in stats 1.1 statement: %v", protocol, ss)
 		}
@@ -574,8 +594,67 @@ func parseNFSTransportStats(ss []string, statVersion string) (*NFSTransportStats
 	default:
 		return nil, fmt.Errorf("unrecognized NFS transport stats version: %q", statVersion)
 	}
+        if protocol == "rdma" {
 
-	// Allocate enough for v1.1 stats since zero value for v1.1 stats will be okay
+	// Allocate enough for v1.1 RDMA stats since zero value for v1.1 stats will be okay
+	// in a v1.0 response. Since the stat length is bigger for TCP stats, we use
+	// the TCP length here.
+	//
+	// Note: slice length must be set to length of v1.1 stats to avoid a panic when
+	// only v1.0 stats are present.
+	// See: https://github.com/prometheus/node_exporter/issues/571.
+	ns := make([]uint64, fieldTransport11RDMALen)
+	for i, s := range ss {
+		n, err := strconv.ParseUint(s, 10, 64)
+		if err != nil {
+			return nil, err
+		}
+
+		ns[i] = n
+	}
+
+	// The fields differ depending on the transport protocol (TCP or UDP)
+	// From https://utcc.utoronto.ca/%7Ecks/space/blog/linux/NFSMountstatsXprt
+	//
+	// For the udp RPC transport there is no connection count, connect idle time,
+	// or idle time (fields #3, #4, and #5); all other fields are the same. So
+	// we set them to 0 here.
+	if protocol == "udp" {
+		ns = append(ns[:2], append(make([]uint64, 3), ns[2:]...)...)
+	}
+
+	return &NFSTransportStats{
+		Protocol:                 protocol,
+		Port:                     ns[0],
+		Bind:                     ns[1],
+		Connect:                  ns[2],
+		ConnectIdleTime:          ns[3],
+		IdleTimeSeconds:          ns[4],
+		Sends:                    ns[5],
+		Receives:                 ns[6],
+		BadTransactionIDs:        ns[7],
+		CumulativeActiveRequests: ns[8],
+		CumulativeBacklog:        ns[9],
+		ReadSegments:      	  ns[10],
+		WriteSegments:      	  ns[11],
+		ReplySegments:      	  ns[12],
+		TotalRdmaReqs:            ns[13],
+		TotalRdmaReps:            ns[14],
+		Pullup:                   ns[15],
+		Fixup:                    ns[16],
+		Hardway:                  ns[17],
+		FailedMarshal:            ns[18],
+		BadReply:      	          ns[19],
+		NoMsgCalls:               ns[20],
+		RecveredMrs:      	  ns[21],
+		OrphanedMrs:      	  ns[22],
+		AllocatedMrs:      	  ns[23],
+		LocalInvalidates:      	  ns[24],
+		EmptySendCtxQ:      	  ns[25],
+		ReplyWaitsForSend:        ns[26],
+	}, nil
+        } else {
+	// Allocate enough for v1.1 RDMA stats since zero value for v1.1 stats will be okay
 	// in a v1.0 response. Since the stat length is bigger for TCP stats, we use
 	// the TCP length here.
 	//
@@ -618,4 +697,5 @@ func parseNFSTransportStats(ss []string, statVersion string) (*NFSTransportStats
 		CumulativeSendingQueue:   ns[11],
 		CumulativePendingQueue:   ns[12],
 	}, nil
+       }
 }
